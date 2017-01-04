@@ -46,7 +46,7 @@ func CountFile(book string, w http.ResponseWriter) {
 		return
 	}
 
-	result, _ := json.Marshal(Result{book, strconv.Itoa(lines), "11"})
+	result, _ := json.Marshal(Result{book, strconv.Itoa(lines), ""})
 	io.WriteString(w, string(result))
 }
 
