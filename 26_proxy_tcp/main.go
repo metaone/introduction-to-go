@@ -44,7 +44,7 @@ func main() {
 			log.Panic(err)
 		}
 
-		go handle(connProxy, connProxy)
+		go handle(redirect, connProxy)
 		go handle(connProxy, redirect)
 	}
 }
