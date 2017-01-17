@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"net"
 	"strings"
-	"fmt"
 )
+
+const DEFAULT_ROOM = "global"
+
+var chat *Chat
 
 var help string = `
 HELP
@@ -18,13 +21,13 @@ list of commands:
 `
 
 type Client struct {
-	address string
+	id string
 	username string
 	room string
-	incoming chan string
-	outgoing chan string
-	reader   *bufio.Reader
-	writer   *bufio.Writer
+	input chan string
+	output chan string
+	reader *bufio.Reader
+	writer *bufio.Writer
 }
 
 func (client *Client) Read() {
@@ -32,142 +35,132 @@ func (client *Client) Read() {
 		line, _ := client.reader.ReadString('\n')
 
 		// check for a chat command
-		if strings.HasPrefix(line, "/") {fmt.Print(1, "\n")
+		if strings.HasPrefix(line, "/") {
 			command := strings.Split(strings.TrimSpace(line), " ")
 			switch command[0] {
 			case "/setname":
 				client.username = command[1]
 			case "/showrooms":
-				for key := range ChatRooms {
-					client.writer.WriteString(key + "\n")
+				for key := range chat.rooms {
+					client.Message(key + "\n")
 				}
-				client.writer.Flush()
 			case "/addroom":
-				if _, ok := ChatRooms[command[1]]; ok {
-					client.writer.WriteString("Error: room already exists\n")
-					client.writer.Flush()
+				if _, ok := chat.rooms[command[1]]; ok {
+					client.Message("Error: room already exists\n")
 				} else {
-					ChatRooms[command[1]] = NewChatRoom()
+					chat.rooms[command[1]] = CreateRoom()
 				}
 			case "/joinroom":
-				if room, ok := ChatRooms[command[1]]; ok {
-					delete(ChatRooms[client.room].clients, client.address)
+				if _, ok := chat.rooms[command[1]]; ok {
+					delete(chat.rooms[client.room].clients, client.id)
 					client.room = command[1]
-					room.Join(client)
-					//client.incoming <- client.username + ": " + "leave room"
+					chat.rooms[client.room].clients[client.id] = client
 				} else {
-					client.writer.WriteString("Error: room not exists\n")
-					client.writer.Flush()
+					client.Message("Error: room not exists\n")
 				}
 			default:
-				client.writer.WriteString(help)
-				client.writer.Flush()
+				client.Message(help)
 			}
 		// add client info and forward further
-		} else {fmt.Print(2, "\n")
-			client.incoming <- client.address + "\n" + client.username + ": " + line
+		} else {
+			chat.rooms[client.room].input <- client.id + "\n" + client.username + ": " + line
 		}
 	}
 }
 
 func (client *Client) Write() {
-	for data := range client.outgoing {
-		client.writer.WriteString(data)
-		client.writer.Flush()
+	for data := range client.output {
+		client.Message(data)
 	}
 }
 
-func (client *Client) Listen() {
+func (client *Client) Message(msg string) {
+	client.writer.WriteString(msg)
+	client.writer.Flush()
+}
+
+func CreateClient(conn net.Conn) *Client {
+	client := &Client{
+		id: conn.RemoteAddr().String(),
+		username: conn.RemoteAddr().String(),
+		room: DEFAULT_ROOM,
+		input: make(chan string),
+		output: make(chan string),
+		reader: bufio.NewReader(conn),
+		writer: bufio.NewWriter(conn),
+	}
+
 	go client.Read()
 	go client.Write()
-}
-
-func NewClient(connection net.Conn) *Client {
-	writer := bufio.NewWriter(connection)
-	reader := bufio.NewReader(connection)
-	address := connection.RemoteAddr().String()
-
-	client := &Client{
-		address: address,
-		username: address,
-		room: "global",
-		incoming: make(chan string),
-		outgoing: make(chan string),
-		reader: reader,
-		writer: writer,
-	}
-
-	client.Listen()
 
 	return client
 }
 
+
 type ChatRoom struct {
 	clients map[string]*Client
-	joins chan net.Conn
-	incoming chan string
-	outgoing chan string
+	input chan string
+	output chan string
 }
 
-var ChatRooms map[string]*ChatRoom = make(map[string]*ChatRoom)
-
-func (chatRoom *ChatRoom) Broadcast(data string) {
+func (room *ChatRoom) Broadcast(data string) {
 	parsed := strings.Split(data, "\n")
 
-	for _, client := range chatRoom.clients {
-		if client.address != parsed[0] {
-			client.outgoing <- parsed[1] + "\n"
+	for _, client := range room.clients {
+		if client.id != parsed[0] {
+			client.output <- parsed[1] + "\n"
 		}
 	}
 }
 
-func (chatRoom *ChatRoom) Join(client *Client) {
-	chatRoom.clients[client.address] = client
-
-	go func() {
-		for {
-			if _, ok := chatRoom.clients[client.address]; ok {
-				chatRoom.incoming <- <-client.incoming
-			} else {
-				return
-			}
-		}
-	}()
-}
-
-func (chatRoom *ChatRoom) Listen() {
-	go func() {
-		for {
-			select {
-			case data := <-chatRoom.incoming:
-				chatRoom.Broadcast(data)
-			case conn := <-chatRoom.joins:
-				chatRoom.Join(NewClient(conn))
-			}
-		}
-	}()
-}
-
-func NewChatRoom() *ChatRoom {
-	chatRoom := &ChatRoom{
+func CreateRoom() *ChatRoom {
+	room := &ChatRoom{
 		clients: make(map[string]*Client),
-		joins: make(chan net.Conn),
-		incoming: make(chan string),
-		outgoing: make(chan string),
+		input: make(chan string),
+		output: make(chan string),
 	}
 
-	chatRoom.Listen()
+	go func() {
+		for {
+			msg := <-room.input
+			room.Broadcast(msg)
+		}
+	}()
 
-	return chatRoom
+	return room
+}
+
+type Chat struct {
+	join chan net.Conn
+	clients map[string]*Client
+	rooms map[string]*ChatRoom
+}
+
+func (chat *Chat) Start() {
+	go func() {
+		for {
+			conn := <-chat.join
+			client := CreateClient(conn)
+			chat.clients[client.id] = client
+			chat.rooms[DEFAULT_ROOM].clients[client.id] = client
+		}
+	}()
 }
 
 func main() {
-	ChatRooms["global"] = NewChatRoom()
+	chat = &Chat{
+		join: make(chan net.Conn),
+		rooms: make(map[string]*ChatRoom),
+		clients: make(map[string]*Client),
+	}
 
+	chat.rooms[DEFAULT_ROOM] = CreateRoom()
+	chat.Start()
+
+	// start TCP
 	listener, _ := net.Listen("tcp", ":6666")
-
 	for {
 		conn, _ := listener.Accept()
-		ChatRooms["global"].joins <- conn
+		chat.join <- conn
 	}
 }
