@@ -12,6 +12,7 @@ type Client struct {
 	id string
 	username string
 	room string
+	chat Chat
 	conn net.Conn
 	input chan string
 	output chan Message
@@ -36,7 +37,7 @@ func (client *Client) Read() {
 	for {
 		line, err := client.reader.ReadString('\n')
 		if err == io.EOF {
-			chat.Leave(client)
+			client.chat.Leave(client)
 			return
 		} else if err != nil {
 			log.Print(err)
@@ -44,39 +45,38 @@ func (client *Client) Read() {
 		}
 
 		if strings.HasPrefix(line, "/") {
-			//client.Command(line)
 			command := strings.Split(strings.TrimSpace(line), " ")
 			switch command[0] {
 			case "/setname":
 				client.username = command[1]
 			case "/showrooms":
-				for key := range chat.rooms {
+				for key := range client.chat.rooms {
 					client.Print(Message{text: key + "\n"})
 				}
 			case "/addroom":
-				if _, ok := chat.rooms[command[1]]; ok {
+				if _, ok := client.chat.rooms[command[1]]; ok {
 					client.Print(Message{text: "Error: room already exists\n"})
 				} else {
-					chat.rooms[command[1]] = NewRoom()
+					client.chat.rooms[command[1]] = NewRoom()
 				}
 			case "/joinroom":
-				if _, ok := chat.rooms[command[1]]; ok {
+				if _, ok := client.chat.rooms[command[1]]; ok {
 					if client.room != command[1] {
-						delete(chat.rooms[client.room].clients, client.id)
+						delete(client.chat.rooms[client.room].clients, client.id)
 						client.room = command[1]
-						chat.rooms[client.room].clients[client.id] = client
+						client.chat.rooms[client.room].clients[client.id] = client
 					}
 				} else {
 					client.Print(Message{text: "Error: room not exists\n"})
 				}
 			case "/exit":
-				chat.Leave(client)
+				client.chat.Leave(client)
 				return
 			default:
 				client.Print(Message{text: help})
 			}
 		} else {
-			chat.rooms[client.room].input <- Message{
+			client.chat.rooms[client.room].input <- Message{
 				fromId: client.id,
 				from: client.username,
 				text: line,
@@ -106,13 +106,14 @@ func (client *Client) Print(msg Message) {
 }
 
 
-func NewClient(conn net.Conn) *Client {
+func NewClient(conn net.Conn, chat Chat) *Client {
 	address := conn.RemoteAddr().String()
 
 	client := &Client{
 		id: address,
 		username: address,
-		room: DEFAULT_ROOM,
+		room: "global",
+		chat: chat,
 		conn: conn,
 		input: make(chan string),
 		output: make(chan Message),

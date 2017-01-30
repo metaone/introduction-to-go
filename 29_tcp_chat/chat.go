@@ -1,6 +1,8 @@
 package main
 
-import "net"
+import (
+	"net"
+)
 
 
 type Chat struct {
@@ -10,14 +12,25 @@ type Chat struct {
 
 
 func (chat *Chat) Join(conn net.Conn) {
-	client := NewClient(conn)
+	client := NewClient(conn, *chat)
 	chat.clients[client.id] = client
-	chat.rooms[DEFAULT_ROOM].clients[client.id] = client
+	chat.rooms["global"].clients[client.id] = client
 }
 
 func (chat *Chat) Leave(client *Client) {
-	client.output <- Message{fromId: client.id, text: "/exit"}
+	close(client.output)
 	delete(chat.rooms[client.room].clients, client.id)
 	delete(chat.clients, client.id)
 	client.conn.Close()
+}
+
+func NewChat() *Chat {
+	chat := &Chat{
+		rooms: make(map[string]*ChatRoom),
+		clients: make(map[string]*Client),
+	}
+
+	chat.rooms["global"] = NewRoom()
+
+	return chat
 }
