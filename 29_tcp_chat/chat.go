@@ -19,9 +19,9 @@ func (chat *Chat) Join(conn net.Conn) {
 
 func (chat *Chat) Leave(client *Client) {
 	close(client.output)
+	client.conn.Close()
 	delete(chat.rooms[client.room].clients, client.id)
 	delete(chat.clients, client.id)
-	client.conn.Close()
 }
 
 func NewChat() *Chat {
